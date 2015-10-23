@@ -3,6 +3,7 @@ from distutils.core import setup, Extension, Command
 from distutils.command.build_ext import build_ext
 
 import os
+from subprocess import Popen
 import sys
 import numpy
 import glob
@@ -17,15 +18,8 @@ class build_ext_subclass(build_ext):
 
     def initialize_options(self):
         self.use_system_fitsio = False
-        self.cfitsio_build_dir = ""
 
-        self.package_basedir = os.path.abspath(os.curdir)
 
-        #cfitsio_version = '3280patch'
-        self.cfitsio_version = '3370patch'
-        self.cfitsio_dir = 'cfitsio%s' % self.cfitsio_version
-        self.cfitsio_build_dir = os.path.join('build', self.cfitsio_dir)
-        self.cfitsio_zlib_dir = os.path.join(self.cfitsio_build_dir,'zlib')
         build_ext.initialize_options(self)    
         self.link_objects = []
         self.extra_link_args = []
@@ -33,6 +27,12 @@ class build_ext_subclass(build_ext):
     def finalize_options(self):
 
         build_ext.finalize_options(self)    
+
+        #cfitsio_version = '3280patch'
+        self.cfitsio_version = '3370patch'
+        self.cfitsio_dir = 'cfitsio%s' % self.cfitsio_version
+        self.cfitsio_build_dir = os.path.join(self.build_temp, self.cfitsio_dir)
+        self.cfitsio_zlib_dir = os.path.join(self.cfitsio_build_dir,'zlib')
 
         if self.use_system_fitsio:
             # Include bz2 by default?  Depends on how system cfitsio was built.
@@ -61,12 +61,6 @@ class build_ext_subclass(build_ext):
 
             self.compile_cfitsio()
 
-            # when using "extra_objects" in Extension, changes in the objects do *not*
-            # cause a re-link!  The only way I know is to force a recompile by removing the
-            # directory
-            for sofile in glob.glob(os.path.join('build','lib*/fitsio/*_fitsio_wrap*.so*')):
-                os.unlink(sofile)
-
             # link against the .a library in cfitsio; 
             # It should have been a 'static' library of relocatable objects (-fPIC), 
             # since we use the python compiler flags
@@ -74,6 +68,11 @@ class build_ext_subclass(build_ext):
             link_objects = glob.glob(os.path.join(self.cfitsio_build_dir,'*.a'))
 
             self.compiler.set_link_objects(link_objects)
+
+            # Ultimate hack: append the .a files to the dependency list
+            # so they will be properly rebuild if cfitsio source is updated.
+            for ext in self.extensions:
+                ext.depends += link_objects
 
         # call the original build_extensions
 
@@ -125,18 +124,18 @@ class build_ext_subclass(build_ext):
         if RANLIB:
             args += ' RANLIB="%s"' % ' '.join(RANLIB)
 
-        os.chdir(self.cfitsio_build_dir)
-        ret=os.system('sh ./configure --with-bzip2 ' + args)
-        if ret != 0:
+        p = Popen("sh ./configure --with-bzip2 " + args, 
+                shell=True, cwd=self.cfitsio_build_dir)
+        p.wait()
+        if p.returncode != 0:
             raise ValueError("could not configure cfitsio %s" % self.cfitsio_version)
-        os.chdir(self.package_basedir)
 
     def compile_cfitsio(self):
-        os.chdir(self.cfitsio_build_dir)
-        ret=os.system('make')
-        if ret != 0:
+        p = Popen("make", 
+                shell=True, cwd=self.cfitsio_build_dir)
+        p.wait()
+        if p.returncode != 0:
             raise ValueError("could not compile cfitsio %s" % self.cfitsio_version)
-        os.chdir(self.package_basedir)
 
 
 include_dirs=[numpy.get_include()]
